@@ -1,16 +1,16 @@
-# Plot Card Overlay Module for Histology DESI Overlay Application
+# plot card overlay module for histology overlay app
 # 
-# This module provides the UI and server functions for displaying and manipulating
-# mass spectrometry imaging data with histology image overlays.
+# provides UI and server functions for displaying and manipulating
+# mass spec imaging data with histology overlays
 # 
-# Features:
-# - Multiple visualization modes for MSI data
-# - Ion selection and mathematical operations
-# - Image transformation and overlay capabilities
-# - Color palette options and enhancement tools
-# - Interactive data tables for ion selection
+# features:
+# - multiple viz modes for MSI data
+# - ion selection and math operations
+# - image transformation and overlay capabilities
+# - color palette options and enhancement tools
+#TODO: simplify this interface its getting complex
 
-# Required libraries
+#required libs
 if (!require("shiny", quietly = TRUE)) install.packages("shiny")
 if (!require("Cardinal", quietly = TRUE)) {
   if (!require("BiocManager", quietly = TRUE)) install.packages("BiocManager")
@@ -32,7 +32,7 @@ library(tools)
 library(png)
 library(jpeg)
 
-# Color palette function - handles various color schemes
+#color palette function - handles various color schemes
 cpal <- function(name) {
   tryCatch({
     switch(name,
@@ -65,11 +65,11 @@ cpal <- function(name) {
           rainbow(256)
         }
       },
-      # Default case - try hcl.colors, fallback to rainbow
+      #default case - try hcl.colors, fallback to rainbow
       tryCatch(hcl.colors(256, name), error = function(e) rainbow(256))
     )
   }, error = function(e) {
-    rainbow(256)  # Ultimate fallback
+    rainbow(256)  #ultimate fallback
   })
 }
 
@@ -154,12 +154,12 @@ plot_card_UI <- function(id) {
       cat("plot_card_server started\n")
       cat("Data class:", class(overview_peaks_sel), "\n")
       
-      # Check if this is PNG MSI data
+      #check if this is PNG MSI data
       if (is.list(overview_peaks_sel) && !is.null(overview_peaks_sel$type) && overview_peaks_sel$type == "png") {
         cat("PNG MSI data detected\n")
         cat("PNG dimensions:", dim(overview_peaks_sel$image), "\n")
         
-        # Handle PNG MSI data separately
+        #handle PNG MSI data separately
         observe({
           output$plot.window <- renderUI({
             fluidRow(
@@ -169,37 +169,37 @@ plot_card_UI <- function(id) {
         })
         
         output$plot3_pk <- renderImage({
-          # A temp file to save the output.
+          #temp file to save the output
           outfile <- tempfile(fileext = '.png')
           
-          # Get transformation values from allInputs
+          #get transformation values from allInputs
           alpha_val <- if (!is.null(allInputs$alpha)) allInputs$alpha else 0.5
           scalex <- if (!is.null(allInputs$scalex)) allInputs$scalex else 1
           scaley <- if (!is.null(allInputs$scaley)) allInputs$scaley else 1
           rotate <- if (!is.null(allInputs$rotate)) allInputs$rotate else 0
-          translate_x <- if (!is.null(allInputs$translate_x)) allInputs$translate_x/100 else 0  # Scale to 0-1
-          translate_y <- if (!is.null(allInputs$translate_y)) allInputs$translate_y/100 else 0  # Scale to 0-1
+          translate_x <- if (!is.null(allInputs$translate_x)) allInputs$translate_x/100 else 0  #scale to 0-1
+          translate_y <- if (!is.null(allInputs$translate_y)) allInputs$translate_y/100 else 0  #scale to 0-1
           
-          # Layer visibility controls
+          #layer visibility controls
           show_msi <- if (!is.null(allInputs$show_msi_layer)) allInputs$show_msi_layer else TRUE
           show_histology <- if (!is.null(allInputs$show_histology_layer)) allInputs$show_histology_layer else TRUE
           
           png(outfile, width = 800, height = 600)
           
-          # Set up plot area
+          #set up plot area
           par(mar = c(0, 0, 0, 0))
           plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "", axes = FALSE)
           
-          # Display the MSI PNG image first (as background) if enabled
+          #display the MSI PNG image first (as backgroun) if enabled
           if (show_msi) {
             img <- overview_peaks_sel$image
             rasterImage(img, 0, 0, 1, 1)
           }
           
-          # Apply histology overlay if available and enabled
+          #apply histology overlay if available and enabled
           if (show_histology && !is.null(allInputs$histology_upload)) {
             tryCatch({
-              # Read histology image
+              #read histology image
               file_ext <- tools::file_ext(allInputs$histology_upload$datapath)
               if (file_ext %in% c("png", "PNG")) {
                 hist_img <- png::readPNG(allInputs$histology_upload$datapath)
@@ -209,34 +209,35 @@ plot_card_UI <- function(id) {
                 return()
               }
               
-              # Apply transparency by modifying the alpha channel
+              #apply transparency by modifyin the alpha channel
               if (length(dim(hist_img)) == 3) {
-                # If no alpha channel, add one
+                #if no alpha channel, add one
                 if (dim(hist_img)[3] == 3) {
                   hist_img_alpha <- array(alpha_val, dim = c(dim(hist_img)[1:2], 1))
                   hist_img <- abind::abind(hist_img, hist_img_alpha, along = 3)
                 } else if (dim(hist_img)[3] == 4) {
-                  # If alpha channel exists, modify it
+                  #if alpha channel exists, modify it
                   hist_img[,,4] <- hist_img[,,4] * alpha_val
                 }
               }
               
-              # Apply transformations to histology overlay
-              # Calculate position with scaling and translation
+              #TODO: add rotation support here
+              # apply transformations to histology overlay
+              # calculate position with scaling and translation
               center_x <- 0.5 + translate_x
               center_y <- 0.5 + translate_y
               
-              # Calculate scaled dimensions
+              #calculate scaled dimensions
               width_scaled <- scalex
               height_scaled <- scaley
               
-              # Calculate corners for transformed image
+              #calculate corners for transformed image
               x_left <- center_x - width_scaled/2
               x_right <- center_x + width_scaled/2
               y_bottom <- center_y - height_scaled/2
               y_top <- center_y + height_scaled/2
               
-              # Apply the overlay (without alpha parameter since rasterImage doesn't support it)
+              #apply overlay (without alpha parameter since rasterImage doesn't support it)
               rasterImage(hist_img, x_left, y_bottom, x_right, y_top)
               
             }, error = function(e) {
@@ -249,7 +250,7 @@ plot_card_UI <- function(id) {
           list(src = outfile, alt = "PNG MSI Image with Histology Overlay")
         }, deleteFile = TRUE)
         
-        return()  # Exit early for PNG data
+        return()  #exit early for PNG data
       }
       
       cat("Data dimensions:", dim(overview_peaks_sel), "\n")
@@ -415,7 +416,7 @@ plot_card_UI <- function(id) {
         })
       })
 
-       #add spectrum or not
+      #add spectrum or not
       output$spectrum<-renderUI({
         
         if(input$ion_viz3=="custom") {
@@ -515,10 +516,10 @@ plot_card_UI <- function(id) {
           
           #req(overview_peaks_sel)
           
-          # Add dependency on alpha slider to trigger re-rendering
+          #add dependency on alpha slider to trigger re-rendering
           alpha_val <- allInputs$alpha
           
-          # A temp file to save the output.
+          # temp file to save the output.
           # This file will be removed later by renderImage
           outfile <- tempfile(fileext = '.png')
           
@@ -614,10 +615,10 @@ plot_card_UI <- function(id) {
             test_value <- mean(mz_range)
             
             
-            # Calculate the absolute differences
+            #calculate the absolute differences
             differences <- abs(mz(overview_peaks_sel) - test_value)
             
-            # Find the index of the minimum difference
+            #find the index of the minimum difference
             closest_index <- which.min(differences)
             
             mz_set=mz(overview_peaks_sel)[closest_index]
@@ -625,7 +626,7 @@ plot_card_UI <- function(id) {
             
             plusminus=tol
             
-            #old way-- may be more memory efficient?
+            #TODO: this old way might be more memory efficient, check later
             # smoothing_option <- if (input$smooth3 != "none") paste0(", smooth ='", input$smooth3,"'") else ""
             # enhance_option <- if (input$contrast3 != "none") paste0(", enhance ='", input$contrast3,"'") else ""
             # 
@@ -895,7 +896,7 @@ plot_card_UI <- function(id) {
             
           }
           
-          # Apply histology overlay if images are uploaded
+          #apply histology overlay if images are uploaded
           # This must be done BEFORE dev.off()
           if (!is.null(allInputs$histology_upload) && 
               !is.null(allInputs$msi_upload)) {
@@ -913,7 +914,7 @@ plot_card_UI <- function(id) {
               
               cat("Applying histology overlay with alpha =", allInputs$alpha, "\n")
               
-              # Load histology image
+              #load histology image
               histology_path <- allInputs$histology_upload$datapath
               file_type <- tools::file_ext(histology_path)
               histology_image <- switch(file_type,
@@ -924,19 +925,19 @@ plot_card_UI <- function(id) {
               
               histology_image <- ensure_3d(histology_image)
               
-              # Always add alpha channel based on slider value
-              # Remove existing alpha channel if present
+              #always add alpha channel based on slider value
+              # remove existing alpha channel if present
               if (dim(histology_image)[3] == 4) {
                 histology_image <- histology_image[,,,1:3]
               }
               
-              # Add new alpha channel based on slider
+              #add new alpha channel based on slider
               alpha_channel <- array(allInputs$alpha, 
                                      dim = c(dim(histology_image)[1], 
                                              dim(histology_image)[2]))
               histology_image <- abind::abind(histology_image, alpha_channel, along = 3)
               
-              # Create and apply histology grob
+              #create and apply histology grob
               histology_grob <- rasterGrob(histology_image, interpolate = TRUE)
               
               histology_grob <- editGrob(
@@ -951,7 +952,7 @@ plot_card_UI <- function(id) {
                 )
               )
               
-              # Draw the overlay on the current plot
+              #draw the overlay on the current plot
               grid.draw(histology_grob)
               
             }, error = function(e) {
@@ -962,7 +963,7 @@ plot_card_UI <- function(id) {
           dev.off()
           
           
-          # Return a list containing the filename
+          #return a list containing the filename
           list(src = outfile,
                contentType = 'image/png',
                width = input$width_im,

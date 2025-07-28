@@ -1,7 +1,7 @@
-# Histology DESI Overlay Application
-# A Shiny application for overlaying histology images with DESI mass spectrometry data
+# histology overlay app
+#TODO: add better error handling for file uploads
 
-# Check and install required packages
+# check packages
 required_packages <- c("shiny", "png", "jpeg", "ggplot2", "grid", "abind", "tools", "DT")
 missing_packages <- c()
 
@@ -15,13 +15,13 @@ if (length(missing_packages) > 0) {
   cat("Installing missing packages:", paste(missing_packages, collapse = ", "), "\n")
   install.packages(missing_packages, dependencies = TRUE)
   
-  # Load packages after installation
+  #load after install
   for (pkg in missing_packages) {
     library(pkg, character.only = TRUE)
   }
 }
 
-# Check Cardinal (Bioconductor package)
+#cardinal from bioconductor
 if (!require("Cardinal", quietly = TRUE)) {
   cat("Installing Cardinal from Bioconductor...\n")
   if (!require("BiocManager", quietly = TRUE)) {
@@ -32,7 +32,7 @@ if (!require("Cardinal", quietly = TRUE)) {
   library(Cardinal)
 }
 
-# Load all required libraries
+#load libs
 library(shiny)
 library(png)
 library(jpeg)
@@ -43,15 +43,16 @@ library(abind)
 library(tools)
 library(DT)
 
-# Source the plotting module
+#source plotting module
 source("plot_Card_overlay_NEW (3).R")
 
-# Function to extract MSI metadata and spatial information
+#TODO: refactor this function its getting messy
+# get MSI metadata
 extract_msi_metadata <- function(msi_data) {
   metadata_info <- list()
   
   tryCatch({
-    # Check if this is PNG MSI data
+    #check if PNG MSI data
     if (is.list(msi_data) && !is.null(msi_data$type) && msi_data$type == "png") {
       metadata_info$class <- "PNG Image"
       metadata_info$dimensions <- paste(dim(msi_data$image), collapse = " x ")
@@ -62,17 +63,17 @@ extract_msi_metadata <- function(msi_data) {
       return(metadata_info)
     }
     
-    # Basic information for Cardinal objects
+    #basic info for cardinal objects
     metadata_info$class <- class(msi_data)[1]
     metadata_info$dimensions <- paste(dim(msi_data), collapse = " x ")
     metadata_info$n_features <- nrow(msi_data)
     metadata_info$n_pixels <- ncol(msi_data)
     
-    # Try to get pixel coordinates and calculate resolution
+    #try to get pixel coords and calc resolution
     if (exists("coord", where = msi_data) || "coord" %in% slotNames(msi_data)) {
       coords <- tryCatch(coord(msi_data), error = function(e) NULL)
       if (!is.null(coords)) {
-        # Calculate pixel spacing in x and y directions
+        #calc pixel spacing in x and y directions
         unique_x <- sort(unique(coords$x))
         unique_y <- sort(unique(coords$y))
         
@@ -91,7 +92,7 @@ extract_msi_metadata <- function(msi_data) {
       }
     }
     
-    # Try to get m/z information
+    #try to get m/z info
     if (exists("mz", where = msi_data) || "mz" %in% slotNames(msi_data)) {
       mz_values <- tryCatch(mz(msi_data), error = function(e) NULL)
       if (!is.null(mz_values)) {
@@ -100,11 +101,12 @@ extract_msi_metadata <- function(msi_data) {
       }
     }
     
-    # Try to extract pixel size from metadata if available
+    #TODO: clean up this metadata extraction its messy
+    # extract pixel size from metadata if avalable
     if (exists("metadata", where = msi_data) || "metadata" %in% slotNames(msi_data)) {
       meta <- tryCatch(metadata(msi_data), error = function(e) NULL)
       if (!is.null(meta)) {
-        # Look for common spatial resolution fields
+        #look for common spatial resolution feilds
         pixel_fields <- grep("pixel|spacing|resolution|size", names(meta), ignore.case = TRUE, value = TRUE)
         if (length(pixel_fields) > 0) {
           metadata_info$pixel_metadata <- meta[pixel_fields]
@@ -112,7 +114,7 @@ extract_msi_metadata <- function(msi_data) {
       }
     }
     
-    # Try to get run information
+    #get run info
     if (exists("run", where = msi_data) || "run" %in% slotNames(msi_data)) {
       runs <- tryCatch(run(msi_data), error = function(e) NULL)
       if (!is.null(runs)) {
@@ -128,21 +130,21 @@ extract_msi_metadata <- function(msi_data) {
   return(metadata_info)
 }
 
-# Function to estimate MSI pixel resolution from Cardinal data
+# estimat MSI pixel resolution from Cardinal data
 estimate_msi_resolution <- function(msi_data) {
   resolution_estimate <- NULL
   
   tryCatch({
-    # Check if this is PNG MSI data - return NULL (no resolution estimation)
+    #check if PNG MSI data - return NULL (no resolution est)
     if (is.list(msi_data) && !is.null(msi_data$type) && msi_data$type == "png") {
       return(NULL)
     }
     
-    # Try to get pixel coordinates
+    #try to get pixel coordinates
     coords <- coord(msi_data)
     
     if (!is.null(coords) && nrow(coords) > 1) {
-      # Calculate median spacing between adjacent pixels
+      #calculate median spacing between adjacent pixels
       unique_x <- sort(unique(coords$x))
       unique_y <- sort(unique(coords$y))
       
@@ -156,7 +158,7 @@ estimate_msi_resolution <- function(msi_data) {
         y_spacing <- median(diff(unique_y), na.rm = TRUE)
       }
       
-      # Use average spacing as pixel resolution estimate
+      #use avg spacing as pixel resolution estimate
       if (!is.na(x_spacing) && !is.na(y_spacing)) {
         resolution_estimate <- mean(c(x_spacing, y_spacing), na.rm = TRUE)
       } else if (!is.na(x_spacing)) {
@@ -165,13 +167,14 @@ estimate_msi_resolution <- function(msi_data) {
         resolution_estimate <- y_spacing
       }
       
-      # For typical DESI data, convert to micrometers if needed
-      # (This is an assumption - may need adjustment based on actual data units)
+      #TODO: make this unit conversion more robust
+      # for typical DESI data, convert to micrometers if needed
+      # (assumption - may need adjustment based on actual data units)
       if (!is.null(resolution_estimate) && resolution_estimate < 1) {
-        # Likely in mm, convert to micrometers
+        #likely in mm, convert to micrometers
         resolution_estimate <- resolution_estimate * 1000
       } else if (!is.null(resolution_estimate) && resolution_estimate > 1000) {
-        # Likely already in micrometers, keep as is
+        #likely already in micrometers, keep as is
         resolution_estimate <- resolution_estimate
       }
     }
@@ -199,14 +202,14 @@ generate_sample_data <- function() {
     baseline = 1
   )
   
-  # Save the sample MSI data
+  #save sample MSI data
   saveRDS(sample_msi, "sample_msi_data.rds")
   
-  # Create a simple sample histology image
+  #create simple sample histology image
   img_size <- 200
   sample_image <- array(0, dim = c(img_size, img_size, 3))
   
-  # Create a gradient background with circular features
+  #creat gradient background with circular features
   for (i in 1:img_size) {
     for (j in 1:img_size) {
       sample_image[i, j, 1] <- 0.8 * (i / img_size)
@@ -215,7 +218,7 @@ generate_sample_data <- function() {
     }
   }
   
-  # Add circular tissue-like structures
+  #add circular tissue-like structures  
   centers <- list(c(50, 50), c(150, 50), c(100, 150), c(50, 150), c(150, 150))
   for (center in centers) {
     cx <- center[1]; cy <- center[2]; radius <- 25
@@ -232,17 +235,17 @@ generate_sample_data <- function() {
     }
   }
   
-  # Save the sample histology image
+  #save sample histology image
   png::writePNG(sample_image, "sample_histology.png")
   
   cat("Sample data generated successfully!\n")
   cat("Files created: sample_msi_data.rds, sample_histology.png\n")
 }
 
-# Uncomment the line below to generate sample data when sourcing this file
+#uncomment line below to generate sample data when sourcing this file
 # generate_sample_data()
 
-# Set maximum file size for uploads (500MB)
+#set max file size for uploads (500MB)
 options(shiny.maxRequestSize = 500*1024^2)
 
 ui <- fluidPage(
@@ -265,10 +268,10 @@ ui <- fluidPage(
     )
   ),
   
-  # Use a sidebar layout with a panel for inputs and a main panel for the image output
+  #use sidebar layout with panel for inputs and main panel for img output
   sidebarLayout(
     sidebarPanel(
-      # File uploads
+      #file uploads
       fileInput("histology_upload", "Upload Histology Image (PNG/JPEG)", 
                 accept = c("image/png", "image/jpeg", ".png", ".jpg", ".jpeg")),
       
@@ -276,16 +279,17 @@ ui <- fluidPage(
                 accept = c('.rds', '.RDS', '.imzML', '.ibd', '.png', '.PNG', 'image/png', 'application/octet-stream'),
                 multiple = TRUE),
       
-      # Image scaling
+      #image scaling
       sliderInput("scale_box", "Multiplier for images", 
                   min = 0.1, max = 10, value = 1, step = 0.1),
       
-      # Save and load settings
+      #TODO: add preset save/load functionality
+      # save and load settings
       downloadButton("save_button", "Save Settings"),
       fileInput("load_button", "Load Settings", accept = c(".rds")),
       actionButton("restore_settings", "Restore Settings"),
       
-      # MSI Metadata Display
+      #MSI metadata display
       h4("MSI Data Information"),
       wellPanel(
         h5("MSI Dataset Metadata"),
@@ -299,7 +303,7 @@ ui <- fluidPage(
         )
       ),
       
-      # Resolution and scaling controls
+      #resolution and scaling controls
       h4("Resolution & Scaling"),
       wellPanel(
         h5("QuPath Resolution Settings"),
@@ -400,7 +404,7 @@ ui <- fluidPage(
     ),
     
     mainPanel(
-      # Output the overlay plot
+      #output the overlay plot
       plot_card_UI("hist_plot_card"),
       sliderInput("alpha", "Adjust Image Transparency", 
                   min = 0, max = 1, value = 0.5)
@@ -409,13 +413,13 @@ ui <- fluidPage(
 )
 server <- function(input, output, session) {
   
-  # Create a reactiveValues object for all inputs
+  #create reactiveValues object for all inputs
   allInputs <- reactiveValues()
   
-  # Reactive value to store MSI data for metadata extraction
+  #reactive value to store MSI data for metadata extraction
   msi_data_reactive <- reactiveVal(NULL)
   
-  # Reactive values for settings
+  #reactive values for settings
   settings <- reactiveValues(
     scalex = 1,
     scaley = 1,
@@ -425,7 +429,7 @@ server <- function(input, output, session) {
     alpha = 0.5
   )
   
-  # Update allInputs whenever any input changes
+  #update allInputs whenever any input changes
   observe({
     inputList <- reactiveValuesToList(input)
     for (name in names(inputList)) {
@@ -433,7 +437,7 @@ server <- function(input, output, session) {
     }
   })
   
-  # Main observer for MSI data processing
+  #main observer for MSI data processing
   observe({
     req(input$histology_upload)
     req(input$msi_upload)
@@ -442,7 +446,7 @@ server <- function(input, output, session) {
     cat("- Histology:", input$histology_upload$name, "\n")
     cat("- MSI:", paste(input$msi_upload$name, collapse = ", "), "\n")
     
-    # Determine MSI file type and load accordingly
+    #determine MSI file type and load accordingly
     msi_files <- input$msi_upload
     msi_paths <- msi_files$datapath
     msi_names <- msi_files$name
@@ -475,22 +479,23 @@ server <- function(input, output, session) {
                          type = "error")
       })
     } else if (any(grepl("\\.png$|\\.PNG$", msi_names, ignore.case = TRUE))) {
-      # Handle PNG files for MSI data
+      #handle PNG files for MSI data
       png_idx <- which(grepl("\\.png$|\\.PNG$", msi_names, ignore.case = TRUE))[1]
       tryCatch({
         cat("Attempting to load MSI PNG from:", msi_paths[png_idx], "\n")
         
-        # Read PNG image
+        #read PNG image
         img <- png::readPNG(msi_paths[png_idx])
         cat("PNG loaded successfully. Dimensions:", dim(img), "\n")
         
-        # Auto-detect and update MSI PNG dimensions
+        #auto-detect and update MSI PNG dimensions
         img_dims <- dim(img)
         updateNumericInput(session, "msi_pixel_width", value = img_dims[2])
         updateNumericInput(session, "msi_pixel_height", value = img_dims[1])
         
-        # Create a simple data structure for PNG MSI data
-        # Store image data and dimensions for use by plotting module
+        #TODO: add support for different PNG formats (grayscale, etc)
+        # create simple data structure for PNG MSI data
+        # store image data and dimensions for use by plotting module
         msi_png_data <- list(
           image = img,
           width = img_dims[2],
@@ -498,14 +503,14 @@ server <- function(input, output, session) {
           type = "png"
         )
         
-        # Store PNG data for metadata extraction
+        #store PNG data for metadata extraction
         msi_data_reactive(msi_png_data)
         
-        # Update MSI resolution based on user input
+        #update MSI resolution based on user input
         showNotification(paste("MSI PNG loaded:", msi_names[png_idx]), type = "message")
         showNotification(paste("Auto-detected MSI PNG dimensions:", img_dims[2], "×", img_dims[1], "pixels"), type = "message")
         
-        # Call the plotting server for PNG MSI data
+        #call plotting server for PNG MSI data
         tryCatch({
           plot_card_server("hist_plot_card", msi_png_data, 
                            spatialOnly = input$spatial, 
@@ -542,24 +547,24 @@ server <- function(input, output, session) {
       temp_ibd_path <- file.path(temp_dir, paste0(imzml_basename, ".ibd"))
       
       tryCatch({
-        # Copy files to temporary location with matching names
+        #copy files to temp location with matching names
         file.copy(msi_paths[imzml_idx], temp_imzml_path, overwrite = TRUE)
         file.copy(msi_paths[ibd_idx], temp_ibd_path, overwrite = TRUE)
         
         cat("Attempting to load MSI data from imzML:", temp_imzml_path, "\n")
         cat("Corresponding ibd file:", temp_ibd_path, "\n")
         
-        # Cardinal should now find the .ibd file
+        #cardinal should now find the .ibd file
         dat_in <- Cardinal::readMSIData(temp_imzml_path)
         cat("MSI data loaded successfully from imzML. Class:", class(dat_in), "\n")
         cat("Data dimensions:", dim(dat_in), "\n")
         cat("Number of features:", nrow(dat_in), "\n")
         cat("Number of pixels:", ncol(dat_in), "\n")
         
-        # Store MSI data for metadata extraction
+        #store MSI data for metadata extraction
         msi_data_reactive(dat_in)
         
-        # Try to estimate and update MSI resolution
+        #try to estimate and update MSI resolution
         estimated_resolution <- estimate_msi_resolution(dat_in)
         if (!is.null(estimated_resolution) && !is.na(estimated_resolution)) {
           updateNumericInput(session, "msi_microns_per_pixel", value = round(estimated_resolution, 2))
@@ -567,7 +572,7 @@ server <- function(input, output, session) {
                           type = "message")
         }
         
-        # Try to call the plotting server with error handling
+        #try to call plotting server with error handling
         tryCatch({
           plot_card_server("hist_plot_card", dat_in, 
                            spatialOnly = input$spatial, 
@@ -587,7 +592,7 @@ server <- function(input, output, session) {
     }
   })
   
-  # Debug observers for file uploads
+  #debug observers for file uploads
   observeEvent(input$histology_upload, {
     if (!is.null(input$histology_upload)) {
       cat("Histology file uploaded:", input$histology_upload$name, 
