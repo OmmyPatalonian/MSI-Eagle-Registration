@@ -153,6 +153,105 @@ plot_card_UI <- function(id) {
       
       cat("plot_card_server started\n")
       cat("Data class:", class(overview_peaks_sel), "\n")
+      
+      # Check if this is PNG MSI data
+      if (is.list(overview_peaks_sel) && !is.null(overview_peaks_sel$type) && overview_peaks_sel$type == "png") {
+        cat("PNG MSI data detected\n")
+        cat("PNG dimensions:", dim(overview_peaks_sel$image), "\n")
+        
+        # Handle PNG MSI data separately
+        observe({
+          output$plot.window <- renderUI({
+            fluidRow(
+              column(12, imageOutput(ns("plot3_pk")))
+            )
+          })
+        })
+        
+        output$plot3_pk <- renderImage({
+          # A temp file to save the output.
+          outfile <- tempfile(fileext = '.png')
+          
+          # Get transformation values from allInputs
+          alpha_val <- if (!is.null(allInputs$alpha)) allInputs$alpha else 0.5
+          scalex <- if (!is.null(allInputs$scalex)) allInputs$scalex else 1
+          scaley <- if (!is.null(allInputs$scaley)) allInputs$scaley else 1
+          rotate <- if (!is.null(allInputs$rotate)) allInputs$rotate else 0
+          translate_x <- if (!is.null(allInputs$translate_x)) allInputs$translate_x/100 else 0  # Scale to 0-1
+          translate_y <- if (!is.null(allInputs$translate_y)) allInputs$translate_y/100 else 0  # Scale to 0-1
+          
+          # Layer visibility controls
+          show_msi <- if (!is.null(allInputs$show_msi_layer)) allInputs$show_msi_layer else TRUE
+          show_histology <- if (!is.null(allInputs$show_histology_layer)) allInputs$show_histology_layer else TRUE
+          
+          png(outfile, width = 800, height = 600)
+          
+          # Set up plot area
+          par(mar = c(0, 0, 0, 0))
+          plot(c(0, 1), c(0, 1), type = "n", xlab = "", ylab = "", axes = FALSE)
+          
+          # Display the MSI PNG image first (as background) if enabled
+          if (show_msi) {
+            img <- overview_peaks_sel$image
+            rasterImage(img, 0, 0, 1, 1)
+          }
+          
+          # Apply histology overlay if available and enabled
+          if (show_histology && !is.null(allInputs$histology_upload)) {
+            tryCatch({
+              # Read histology image
+              file_ext <- tools::file_ext(allInputs$histology_upload$datapath)
+              if (file_ext %in% c("png", "PNG")) {
+                hist_img <- png::readPNG(allInputs$histology_upload$datapath)
+              } else if (file_ext %in% c("jpg", "jpeg", "JPG", "JPEG")) {
+                hist_img <- jpeg::readJPEG(allInputs$histology_upload$datapath)
+              } else {
+                return()
+              }
+              
+              # Apply transparency by modifying the alpha channel
+              if (length(dim(hist_img)) == 3) {
+                # If no alpha channel, add one
+                if (dim(hist_img)[3] == 3) {
+                  hist_img_alpha <- array(alpha_val, dim = c(dim(hist_img)[1:2], 1))
+                  hist_img <- abind::abind(hist_img, hist_img_alpha, along = 3)
+                } else if (dim(hist_img)[3] == 4) {
+                  # If alpha channel exists, modify it
+                  hist_img[,,4] <- hist_img[,,4] * alpha_val
+                }
+              }
+              
+              # Apply transformations to histology overlay
+              # Calculate position with scaling and translation
+              center_x <- 0.5 + translate_x
+              center_y <- 0.5 + translate_y
+              
+              # Calculate scaled dimensions
+              width_scaled <- scalex
+              height_scaled <- scaley
+              
+              # Calculate corners for transformed image
+              x_left <- center_x - width_scaled/2
+              x_right <- center_x + width_scaled/2
+              y_bottom <- center_y - height_scaled/2
+              y_top <- center_y + height_scaled/2
+              
+              # Apply the overlay (without alpha parameter since rasterImage doesn't support it)
+              rasterImage(hist_img, x_left, y_bottom, x_right, y_top)
+              
+            }, error = function(e) {
+              cat("Error overlaying histology:", e$message, "\n")
+            })
+          }
+          
+          dev.off()
+          
+          list(src = outfile, alt = "PNG MSI Image with Histology Overlay")
+        }, deleteFile = TRUE)
+        
+        return()  # Exit early for PNG data
+      }
+      
       cat("Data dimensions:", dim(overview_peaks_sel), "\n")
 
       #create new overview_peaks_sel object with mean values

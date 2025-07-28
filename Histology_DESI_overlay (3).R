@@ -51,7 +51,18 @@ extract_msi_metadata <- function(msi_data) {
   metadata_info <- list()
   
   tryCatch({
-    # Basic information
+    # Check if this is PNG MSI data
+    if (is.list(msi_data) && !is.null(msi_data$type) && msi_data$type == "png") {
+      metadata_info$class <- "PNG Image"
+      metadata_info$dimensions <- paste(dim(msi_data$image), collapse = " x ")
+      metadata_info$width <- msi_data$width
+      metadata_info$height <- msi_data$height
+      metadata_info$n_features <- "N/A (PNG)"
+      metadata_info$n_pixels <- prod(dim(msi_data$image)[1:2])
+      return(metadata_info)
+    }
+    
+    # Basic information for Cardinal objects
     metadata_info$class <- class(msi_data)[1]
     metadata_info$dimensions <- paste(dim(msi_data), collapse = " x ")
     metadata_info$n_features <- nrow(msi_data)
@@ -122,6 +133,11 @@ estimate_msi_resolution <- function(msi_data) {
   resolution_estimate <- NULL
   
   tryCatch({
+    # Check if this is PNG MSI data - return NULL (no resolution estimation)
+    if (is.list(msi_data) && !is.null(msi_data$type) && msi_data$type == "png") {
+      return(NULL)
+    }
+    
     # Try to get pixel coordinates
     coords <- coord(msi_data)
     
@@ -237,11 +253,11 @@ ui <- fluidPage(
     column(12,
       wellPanel(
         h4("Instructions:"),
-        p("1. Upload a histology image (PNG/JPEG) and MSI dataset (.rds file)"),
+        p("1. Upload a histology image (PNG/JPEG) and MSI dataset (.rds, .imzML, or PNG file)"),
         p("2. Use the transformation controls to align the histology image with MSI data"),
         p("3. Adjust transparency to see the overlay effect"),
         p("4. Save/load settings to preserve your transformations"),
-        p(tags$strong("Note:"), "MSI data should be saved as .rds files containing Cardinal-compatible objects"),
+        p(tags$strong("Note:"), "MSI data can be saved as .rds files (Cardinal objects), .imzML/.ibd pairs, or PNG images"),
         tags$hr(),
         p(tags$strong("Sample data available:"), 
           "sample_histology.png and sample_msi_data.rds in the current directory")
@@ -256,8 +272,8 @@ ui <- fluidPage(
       fileInput("histology_upload", "Upload Histology Image (PNG/JPEG)", 
                 accept = c("image/png", "image/jpeg", ".png", ".jpg", ".jpeg")),
       
-      fileInput("msi_upload", "Upload MSI dataset (imzML + ibd or .rds)", 
-                accept = c('.rds', '.RDS', '.imzML', '.ibd', 'application/octet-stream'),
+      fileInput("msi_upload", "Upload MSI dataset (imzML + ibd, .rds, or PNG)", 
+                accept = c('.rds', '.RDS', '.imzML', '.ibd', '.png', '.PNG', 'image/png', 'application/octet-stream'),
                 multiple = TRUE),
       
       # Image scaling
@@ -291,6 +307,12 @@ ui <- fluidPage(
           column(6, numericInput("histology_pixel_width", "Histology Width (pixels)", 
                                value = 1024, min = 100, max = 10000, step = 1)),
           column(6, numericInput("histology_pixel_height", "Histology Height (pixels)", 
+                               value = 1024, min = 100, max = 10000, step = 1))
+        ),
+        fluidRow(
+          column(6, numericInput("msi_pixel_width", "MSI PNG Width (pixels)", 
+                               value = 1024, min = 100, max = 10000, step = 1)),
+          column(6, numericInput("msi_pixel_height", "MSI PNG Height (pixels)", 
                                value = 1024, min = 100, max = 10000, step = 1))
         ),
         fluidRow(
@@ -367,7 +389,14 @@ ui <- fluidPage(
       
       # Display options
       checkboxInput("spatial", "Spatial plot only", value = TRUE),
-      checkboxInput("debug", "Debug plot?", value = FALSE)
+      checkboxInput("debug", "Debug plot?", value = FALSE),
+      
+      # Layer visibility controls for PNG overlay
+      h5("Layer Visibility"),
+      fluidRow(
+        column(6, checkboxInput("show_msi_layer", "Show MSI Layer", value = TRUE)),
+        column(6, checkboxInput("show_histology_layer", "Show Histology Layer", value = TRUE))
+      )
     ),
     
     mainPanel(
@@ -443,6 +472,53 @@ server <- function(input, output, session) {
       }, error = function(e) {
         cat("Error loading MSI data:", e$message, "\n")
         showNotification(paste("Error loading MSI data:", e$message), 
+                         type = "error")
+      })
+    } else if (any(grepl("\\.png$|\\.PNG$", msi_names, ignore.case = TRUE))) {
+      # Handle PNG files for MSI data
+      png_idx <- which(grepl("\\.png$|\\.PNG$", msi_names, ignore.case = TRUE))[1]
+      tryCatch({
+        cat("Attempting to load MSI PNG from:", msi_paths[png_idx], "\n")
+        
+        # Read PNG image
+        img <- png::readPNG(msi_paths[png_idx])
+        cat("PNG loaded successfully. Dimensions:", dim(img), "\n")
+        
+        # Auto-detect and update MSI PNG dimensions
+        img_dims <- dim(img)
+        updateNumericInput(session, "msi_pixel_width", value = img_dims[2])
+        updateNumericInput(session, "msi_pixel_height", value = img_dims[1])
+        
+        # Create a simple data structure for PNG MSI data
+        # Store image data and dimensions for use by plotting module
+        msi_png_data <- list(
+          image = img,
+          width = img_dims[2],
+          height = img_dims[1],
+          type = "png"
+        )
+        
+        # Store PNG data for metadata extraction
+        msi_data_reactive(msi_png_data)
+        
+        # Update MSI resolution based on user input
+        showNotification(paste("MSI PNG loaded:", msi_names[png_idx]), type = "message")
+        showNotification(paste("Auto-detected MSI PNG dimensions:", img_dims[2], "×", img_dims[1], "pixels"), type = "message")
+        
+        # Call the plotting server for PNG MSI data
+        tryCatch({
+          plot_card_server("hist_plot_card", msi_png_data, 
+                           spatialOnly = input$spatial, 
+                           allInputs = allInputs)
+          cat("plot_card_server called successfully for PNG MSI data\n")
+        }, error = function(plot_error) {
+          cat("Error in plot_card_server for PNG:", plot_error$message, "\n")
+          showNotification(paste("Error in plotting module for PNG:", plot_error$message), type = "error")
+        })
+        
+      }, error = function(e) {
+        cat("Error loading MSI PNG:", e$message, "\n")
+        showNotification(paste("Error loading MSI PNG:", e$message), 
                          type = "error")
       })
     } else if (any(grepl("\\.imzML$", msi_names, ignore.case = TRUE))) {
