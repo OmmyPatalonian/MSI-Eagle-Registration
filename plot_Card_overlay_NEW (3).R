@@ -1,14 +1,5 @@
 # plot card overlay module for histology overlay app
-# 
-# provides UI and server functions for displaying and manipulating
-# mass spec imaging data with histology overlays
-# 
-# features:
-# - multiple viz modes for MSI data
-# - ion selection and math operations
-# - image transformation and overlay capabilities
-# - color palette options and enhancement tools
-#TODO: simplify this interface its getting complex
+
 
 #required libs
 if (!require("shiny", quietly = TRUE)) install.packages("shiny")
