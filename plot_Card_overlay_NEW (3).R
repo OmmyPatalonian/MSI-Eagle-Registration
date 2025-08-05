@@ -13,6 +13,9 @@ if (!require("abind", quietly = TRUE)) install.packages("abind")
 if (!require("tools", quietly = TRUE)) install.packages("tools")
 if (!require("png", quietly = TRUE)) install.packages("png")
 if (!require("jpeg", quietly = TRUE)) install.packages("jpeg")
+if (!require("ggplot2", quietly = TRUE)) install.packages("ggplot2")
+if (!require("scales", quietly = TRUE)) install.packages("scales")
+if (!require("viridis", quietly = TRUE)) install.packages("viridis")
 
 library(shiny)
 library(Cardinal)
@@ -22,6 +25,9 @@ library(abind)
 library(tools)
 library(png)
 library(jpeg)
+library(ggplot2)
+library(scales)
+library(viridis)
 
 #color palette function - handles various color schemes
 cpal <- function(name) {
@@ -523,6 +529,157 @@ plot_card_UI <- function(id) {
           
           if(!is.null(input$select_runs)) {
             overview_peaks_sel <- subsetPixels(overview_peaks_sel, run %in% input$select_runs)
+          }
+          
+          # Check for clean rendering mode
+          if (!is.null(allInputs$render_mode) && allInputs$render_mode == "clean") {
+            # Extract MSI ion image using calibrated coordinates
+            tryCatch({
+              # Get the selected m/z values for visualization
+              if (input$ion_viz3 == "custom" && !is.null(mz_viz3()) && length(mz_viz3()) > 0) {
+                selected_mz <- mz_viz3()[1]  # Use first selected m/z
+              } else if (input$ion_viz3 == "viz_first") {
+                selected_mz <- mz(overview_peaks_sel)[1]  # Use first m/z
+              } else {
+                # For TIC or other modes, use first m/z as fallback
+                selected_mz <- mz(overview_peaks_sel)[1]
+              }
+              
+              #ccreate clean MSI image using cardinal
+              test_image <- Cardinal::image(overview_peaks_sel, 
+                                          mz = selected_mz,
+                                          tolerance = if(!is.null(input$plusminus_viz3)) input$plusminus_viz3 else 0.05,
+                                          enhance = if(input$contrast3 != "none") input$contrast3 else NULL,
+                                          smooth = if(input$smooth3 != "none") input$smooth3 else NULL,
+                                          col = cpal(input$color3),
+                                          scale = input$normalize3)
+              
+              #extract pixel data from Cardinal plot
+              test_pixels <- test_image$plots[[1]]$marks$pixels$encoding
+              
+              ##cnstruct clean pixel level data frame
+              static_coords <- data.frame(
+                x = test_pixels$x, 
+                y = test_pixels$y, 
+                color = test_pixels$color
+              )
+              
+              # Normalize color range
+              static_coords$color_normalized <- scales::rescale(static_coords$color)
+              
+              # Create clean ggplot without borders/axes
+              p_clean <- ggplot(static_coords, aes(x = x, y = y, fill = color_normalized)) +
+                geom_tile(alpha = alpha_val) +  # Apply transparency from alpha slider
+                scale_fill_viridis_c(option = "inferno") +
+                scale_y_reverse() +  # matches imaging convention
+                theme_void() +       # removes all axes, ticks, and borders
+                theme(plot.margin = unit(c(0,0,0,0), "cm"))  # remove all margins
+              
+              # Save the clean plot with transparent background
+              ggsave(outfile, plot = p_clean, width = input$width_im/100, height = input$height_im/100, 
+                     units = "in", dpi = 100, bg = "transparent")
+              
+              # If histology image is available, create overlay using traditional plotting
+              if (!is.null(allInputs$histology_upload)) {
+                tryCatch({
+                  # Reopene the plot device to add histology overlay
+                  png(outfile, width = input$width_im, height = input$height_im, bg = "white")
+                  
+                  # Load and display histology image first (as background)
+                  histology_path <- allInputs$histology_upload$datapath
+                  file_type <- tools::file_ext(histology_path)
+                  histology_image <- switch(file_type,
+                                            "png" = png::readPNG(histology_path),
+                                            "jpg" = jpeg::readJPEG(histology_path),
+                                            "jpeg" = jpeg::readJPEG(histology_path),
+                                            stop("Unsupported file type"))
+                  
+                  # Set up plot area
+                  par(mar = c(0, 0, 0, 0))
+                  plot(range(static_coords$x), range(static_coords$y), type = "n", 
+                       xlab = "", ylab = "", axes = FALSE)
+                  
+                  # Display histology image as background
+                  
+                  # Apply scaling to histology image based on allInputs values
+                  scalex <- if (!is.null(allInputs$scalex)) allInputs$scalex else 1
+                  scaley <- if (!is.null(allInputs$scaley)) allInputs$scaley else 1
+                  rotate <- if (!is.null(allInputs$rotate)) allInputs$rotate else 0
+                  translate_x <- if (!is.null(allInputs$translate_x)) allInputs$translate_x/100 else 0
+                  translate_y <- if (!is.null(allInputs$translate_y)) allInputs$translate_y/100 else 0
+                  
+                  # Calculate center position
+                  center_x <- (min(static_coords$x) + max(static_coords$x))/2 + translate_x
+                  center_y <- (min(static_coords$y) + max(static_coords$y))/2 + translate_y
+                  
+                  # Calculate dimensions with scaling
+                  width_full <- max(static_coords$x) - min(static_coords$x)
+                  height_full <- max(static_coords$y) - min(static_coords$y)
+                  width_scaled <- width_full * scalex
+                  height_scaled <- height_full * scaley
+                  
+                  # Calculate corners for transformed image
+                  x_left <- center_x - width_scaled/2
+                  x_right <- center_x + width_scaled/2
+                  y_bottom <- center_y - height_scaled/2
+                  y_top <- center_y + height_scaled/2
+                  
+                  # Apply transformations with rotation if needed
+                  if (!is.null(rotate) && rotate != 0) {
+                    # Apply transformations with rotation angle
+                    rasterImage(histology_image, 
+                                x_left, y_bottom, x_right, y_top,
+                                angle = rotate)
+                  } else {
+                    # No rotation needed
+                    rasterImage(histology_image, 
+                                x_left, y_bottom, x_right, y_top)
+                  }
+                  
+                  # Overlay the MSI data with transparency
+                  # Create a color matrix from the MSI data
+                  x_coords <- sort(unique(static_coords$x))
+                  y_coords <- sort(unique(static_coords$y))
+                  
+                  # Create image matrix
+                  img_matrix <- array(0, dim = c(length(y_coords), length(x_coords), 4))
+                  
+                  # Fill in the MSI data with colors and alpha
+                  for (i in seq_len(nrow(static_coords))) {
+                    x_idx <- which(x_coords == static_coords$x[i])
+                    y_idx <- which(y_coords == static_coords$y[i])
+                    
+                    # Get color from viridis palette
+                    color_val <- static_coords$color_normalized[i]
+                    viridis_color <- viridis::inferno(256)[round(color_val * 255) + 1]
+                    rgb_vals <- col2rgb(viridis_color) / 255
+                    
+                    img_matrix[y_idx, x_idx, 1] <- rgb_vals[1]  # R
+                    img_matrix[y_idx, x_idx, 2] <- rgb_vals[2]  # G
+                    img_matrix[y_idx, x_idx, 3] <- rgb_vals[3]  # B
+                    img_matrix[y_idx, x_idx, 4] <- alpha_val    # Alpha
+                  }
+                  
+                  # Display the MSI overlay
+                  # Note: MSI data doesn't need scaling as it's already the reference frame
+                  rasterImage(img_matrix, 
+                              min(static_coords$x), min(static_coords$y),
+                              max(static_coords$x), max(static_coords$y))
+                  
+                }, error = function(e) {
+                  cat("Error creating histology overlay in clean mode:", e$message, "\n")
+                })
+              }
+              
+              dev.off()
+              
+              # Return the clean image
+              return(list(src = outfile, alt = "Clean MSI Image"))
+              
+            }, error = function(e) {
+              cat("Error in clean rendering mode:", e$message, "\n")
+              # Fall back to regular rendering
+            })
           }
           
           vp_orig<-vizi_par()

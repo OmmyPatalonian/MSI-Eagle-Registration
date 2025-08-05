@@ -44,7 +44,7 @@ library(tools)
 library(DT)
 
 #source plotting module
-source("plot_Card_overlay_NEW (3).R")
+source("/Users/ompatel/CalI/MSI-Eagle-Registration/plot_Card_overlay_NEW (3).R")
 
 #TODO: refactor this function its getting messy
 # get MSI metadata
@@ -70,7 +70,7 @@ extract_msi_metadata <- function(msi_data) {
     metadata_info$n_pixels <- ncol(msi_data)
     
     #try to get pixel coords and calc resolution
-    if (exists("coord", where = msi_data) || "coord" %in% slotNames(msi_data)) {
+    if ("coord" %in% slotNames(msi_data)) {
       coords <- tryCatch(coord(msi_data), error = function(e) NULL)
       if (!is.null(coords)) {
         #calc pixel spacing in x and y directions
@@ -93,7 +93,7 @@ extract_msi_metadata <- function(msi_data) {
     }
     
     #try to get m/z info
-    if (exists("mz", where = msi_data) || "mz" %in% slotNames(msi_data)) {
+    if ("mz" %in% slotNames(msi_data)) {
       mz_values <- tryCatch(mz(msi_data), error = function(e) NULL)
       if (!is.null(mz_values)) {
         metadata_info$mz_range <- paste(round(range(mz_values), 4), collapse = " to ")
@@ -101,9 +101,9 @@ extract_msi_metadata <- function(msi_data) {
       }
     }
     
-    #TODO: clean up this metadata extraction its messy
+    #TODO: clean up this metadata extraction its getting messy
     # extract pixel size from metadata if avalable
-    if (exists("metadata", where = msi_data) || "metadata" %in% slotNames(msi_data)) {
+    if ("metadata" %in% slotNames(msi_data)) {
       meta <- tryCatch(metadata(msi_data), error = function(e) NULL)
       if (!is.null(meta)) {
         #look for common spatial resolution feilds
@@ -114,8 +114,33 @@ extract_msi_metadata <- function(msi_data) {
       }
     }
     
+    # Also check pixelData for resolution information
+    if ("pixelData" %in% slotNames(msi_data)) {
+      pdata <- tryCatch(pixelData(msi_data), error = function(e) NULL)
+      if (!is.null(pdata)) {
+        pixel_fields <- grep("pixel|spacing|resolution|size", names(pdata), ignore.case = TRUE, value = TRUE)
+        if (length(pixel_fields) > 0) {
+          metadata_info$pixelData_resolution <- pdata[pixel_fields]
+        }
+      }
+    }
+    
+    # Check experimentData for instrument settings
+    if ("experimentData" %in% slotNames(msi_data)) {
+      exp_data <- tryCatch(experimentData(msi_data), error = function(e) NULL)
+      if (!is.null(exp_data)) {
+        # Try to get notes or other metadata
+        if ("notes" %in% slotNames(exp_data)) {
+          notes <- tryCatch(notes(exp_data), error = function(e) NULL)
+          if (!is.null(notes) && length(notes) > 0) {
+            metadata_info$experiment_notes <- notes
+          }
+        }
+      }
+    }
+    
     #get run info
-    if (exists("run", where = msi_data) || "run" %in% slotNames(msi_data)) {
+    if ("run" %in% slotNames(msi_data)) {
       runs <- tryCatch(run(msi_data), error = function(e) NULL)
       if (!is.null(runs)) {
         metadata_info$n_runs <- length(unique(runs))
@@ -130,6 +155,134 @@ extract_msi_metadata <- function(msi_data) {
   return(metadata_info)
 }
 
+# Function to extract resolution from common MSI filename patterns
+extract_resolution_from_filename <- function(filename) {
+  if (is.null(filename)) return(NULL)
+  
+  # Common patterns for resolution in filenames
+  # Examples: "2um", "5_um", "10micron", "50µm", etc.
+  
+  # Pattern 1: Numbers followed by "um" or "µm"
+  pattern1 <- "([0-9.]+)\\s*u?m(?![a-z])"
+  match1 <- regexpr(pattern1, filename, ignore.case = TRUE)
+  if (match1 > 0) {
+    resolution_str <- regmatches(filename, match1)
+    resolution_num <- as.numeric(gsub("[^0-9.]", "", resolution_str))
+    if (!is.na(resolution_num) && resolution_num > 0) {
+      cat("Extracted resolution from filename pattern '", resolution_str, "':", resolution_num, "μm\n")
+      return(resolution_num)
+    }
+  }
+  
+  # Pattern 2: Numbers followed by "micron" or "micro"
+  pattern2 <- "([0-9.]+)\\s*micr?o?n?"
+  match2 <- regexpr(pattern2, filename, ignore.case = TRUE)
+  if (match2 > 0) {
+    resolution_str <- regmatches(filename, match2)
+    resolution_num <- as.numeric(gsub("[^0-9.]", "", resolution_str))
+    if (!is.na(resolution_num) && resolution_num > 0) {
+      cat("Extracted resolution from filename pattern '", resolution_str, "':", resolution_num, "μm\n")
+      return(resolution_num)
+    }
+  }
+  
+  # Pattern 3: Common DESI naming like "2um_step" or "5um_raster"
+  pattern3 <- "([0-9.]+)\\s*u?m[_-]?(step|rast|pixel)"
+  match3 <- regexpr(pattern3, filename, ignore.case = TRUE)
+  if (match3 > 0) {
+    resolution_str <- regmatches(filename, match3)
+    resolution_num <- as.numeric(gsub("[^0-9.]", "", resolution_str))
+    if (!is.na(resolution_num) && resolution_num > 0) {
+      cat("Extracted resolution from filename pattern '", resolution_str, "':", resolution_num, "μm\n")
+      return(resolution_num)
+    }
+  }
+  
+  cat("No resolution pattern found in filename:", filename, "\n")
+  return(NULL)
+}
+
+# Function to manually inspect MSI resolution data
+inspect_msi_resolution <- function(msi_data) {
+  cat("=== MSI Resolution Inspection ===\n")
+  
+  if (is.list(msi_data) && !is.null(msi_data$type) && msi_data$type == "png") {
+    cat("PNG MSI data - no resolution metadata available\n")
+    return()
+  }
+  
+  # 1. Check coordinate information
+  cat("\n1. Coordinate Analysis:\n")
+  coords <- tryCatch(coord(msi_data), error = function(e) NULL)
+  if (!is.null(coords)) {
+    cat("  Coordinate range X:", range(coords$x), "\n")
+    cat("  Coordinate range Y:", range(coords$y), "\n")
+    cat("  Unique X values:", length(unique(coords$x)), "\n")
+    cat("  Unique Y values:", length(unique(coords$y)), "\n")
+    
+    if (length(unique(coords$x)) > 1) {
+      x_diff <- median(diff(sort(unique(coords$x))))
+      cat("  X spacing:", x_diff, "\n")
+    }
+    if (length(unique(coords$y)) > 1) {
+      y_diff <- median(diff(sort(unique(coords$y))))
+      cat("  Y spacing:", y_diff, "\n")
+    }
+  } else {
+    cat("  No coordinate data found\n")
+  }
+  
+  # 2. Check all slot names
+  cat("\n2. Available slots:\n")
+  slots <- slotNames(msi_data)
+  cat("  ", paste(slots, collapse = ", "), "\n")
+  
+  # 3. Check pixelData
+  cat("\n3. PixelData fields:\n")
+  if ("pixelData" %in% slots) {
+    pdata <- tryCatch(pixelData(msi_data), error = function(e) NULL)
+    if (!is.null(pdata)) {
+      cat("  Available fields:", paste(names(pdata), collapse = ", "), "\n")
+      resolution_fields <- grep("pixel|spacing|resolution|size", names(pdata), ignore.case = TRUE, value = TRUE)
+      if (length(resolution_fields) > 0) {
+        cat("  Resolution-related fields:\n")
+        for (field in resolution_fields) {
+          sample_val <- pdata[[field]][1]
+          cat("    ", field, ":", sample_val, "(first value)\n")
+        }
+      }
+    }
+  }
+  
+  # 4. Check experimentData
+  cat("\n4. Experiment metadata:\n")
+  if ("experimentData" %in% slots) {
+    exp_data <- tryCatch(experimentData(msi_data), error = function(e) NULL)
+    if (!is.null(exp_data)) {
+      exp_slots <- slotNames(exp_data)
+      cat("  Available experiment slots:", paste(exp_slots, collapse = ", "), "\n")
+      
+      if ("notes" %in% exp_slots) {
+        notes <- tryCatch(notes(exp_data), error = function(e) NULL)
+        if (!is.null(notes) && length(notes) > 0) {
+          cat("  Notes available:", names(notes), "\n")
+        }
+      }
+    }
+  }
+  
+  # 5. Try Cardinal metadata function
+  cat("\n5. Cardinal metadata:\n")
+  meta <- tryCatch(metadata(msi_data), error = function(e) NULL)
+  if (!is.null(meta)) {
+    cat("  Metadata fields:", paste(names(meta), collapse = ", "), "\n")
+  } else {
+    cat("  No metadata accessible via metadata() function\n")
+  }
+  
+  cat("\n=== End Inspection ===\n")
+}
+
 # estimat MSI pixel resolution from Cardinal data
 estimate_msi_resolution <- function(msi_data) {
   resolution_estimate <- NULL
@@ -140,46 +293,109 @@ estimate_msi_resolution <- function(msi_data) {
       return(NULL)
     }
     
-    #try to get pixel coordinates
-    coords <- coord(msi_data)
+    cat("Attempting to extract MSI resolution from Cardinal object...\n")
     
-    if (!is.null(coords) && nrow(coords) > 1) {
-      #calculate median spacing between adjacent pixels
-      unique_x <- sort(unique(coords$x))
-      unique_y <- sort(unique(coords$y))
-      
-      x_spacing <- NA
-      y_spacing <- NA
-      
-      if (length(unique_x) > 1) {
-        x_spacing <- median(diff(unique_x), na.rm = TRUE)
-      }
-      if (length(unique_y) > 1) {
-        y_spacing <- median(diff(unique_y), na.rm = TRUE)
-      }
-      
-      #use avg spacing as pixel resolution estimate
-      if (!is.na(x_spacing) && !is.na(y_spacing)) {
-        resolution_estimate <- mean(c(x_spacing, y_spacing), na.rm = TRUE)
-      } else if (!is.na(x_spacing)) {
-        resolution_estimate <- x_spacing
-      } else if (!is.na(y_spacing)) {
-        resolution_estimate <- y_spacing
-      }
-      
-      #TODO: make this unit conversion more robust
-      # for typical DESI data, convert to micrometers if needed
-      # (assumption - may need adjustment based on actual data units)
-      if (!is.null(resolution_estimate) && resolution_estimate < 1) {
-        #likely in mm, convert to micrometers
-        resolution_estimate <- resolution_estimate * 1000
-      } else if (!is.null(resolution_estimate) && resolution_estimate > 1000) {
-        #likely already in micrometers, keep as is
-        resolution_estimate <- resolution_estimate
+    # Method 1: Check for explicit pixel size metadata
+    if ("pixelData" %in% slotNames(msi_data)) {
+      pdata <- tryCatch(pixelData(msi_data), error = function(e) NULL)
+      if (!is.null(pdata)) {
+        # Look for pixel size fields
+        pixel_size_fields <- grep("pixel.*size|resolution|spacing", names(pdata), ignore.case = TRUE, value = TRUE)
+        if (length(pixel_size_fields) > 0) {
+          for (field in pixel_size_fields) {
+            val <- pdata[[field]][1]
+            if (!is.na(val) && is.numeric(val) && val > 0) {
+              cat("Found pixel size in pixelData:", field, "=", val, "\n")
+              resolution_estimate <- val
+              break
+            }
+          }
+        }
       }
     }
+    
+    # Method 2: Check experimentData metadata for instrument settings
+    if (is.null(resolution_estimate) && "experimentData" %in% slotNames(msi_data)) {
+      exp_data <- tryCatch(experimentData(msi_data), error = function(e) NULL)
+      if (!is.null(exp_data) && "notes" %in% slotNames(exp_data)) {
+        notes <- tryCatch(notes(exp_data), error = function(e) NULL)
+        if (!is.null(notes)) {
+          # Look for pixel size in notes/metadata
+          pixel_info <- grep("pixel.*size|resolution|spacing", names(notes), ignore.case = TRUE, value = TRUE)
+          if (length(pixel_info) > 0) {
+            for (info in pixel_info) {
+              val <- as.numeric(notes[[info]])
+              if (!is.na(val) && val > 0) {
+                cat("Found pixel size in experimentData:", info, "=", val, "\n")
+                resolution_estimate <- val
+                break
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    # Method 3: Calculate from coordinate spacing (original method)
+    if (is.null(resolution_estimate)) {
+      cat("No explicit resolution found, calculating from coordinates...\n")
+      coords <- coord(msi_data)
+      
+      if (!is.null(coords) && nrow(coords) > 1) {
+        #calculate median spacing between adjacent pixels
+        unique_x <- sort(unique(coords$x))
+        unique_y <- sort(unique(coords$y))
+        
+        x_spacing <- NA
+        y_spacing <- NA
+        
+        if (length(unique_x) > 1) {
+          x_spacing <- median(diff(unique_x), na.rm = TRUE)
+          cat("X spacing calculated:", x_spacing, "\n")
+        }
+        if (length(unique_y) > 1) {
+          y_spacing <- median(diff(unique_y), na.rm = TRUE)
+          cat("Y spacing calculated:", y_spacing, "\n")
+        }
+        
+        #use avg spacing as pixel resolution estimate
+        if (!is.na(x_spacing) && !is.na(y_spacing)) {
+          resolution_estimate <- mean(c(x_spacing, y_spacing), na.rm = TRUE)
+        } else if (!is.na(x_spacing)) {
+          resolution_estimate <- x_spacing
+        } else if (!is.na(y_spacing)) {
+          resolution_estimate <- y_spacing
+        }
+        
+        cat("Coordinate-based resolution estimate:", resolution_estimate, "\n")
+      }
+    }
+    
+    # Method 4: Check coordinate units and apply conversions
+    if (!is.null(resolution_estimate)) {
+      cat("Raw resolution estimate:", resolution_estimate, "\n")
+      
+      # Smart unit detection and conversion
+      if (resolution_estimate < 0.1) {
+        # Likely in meters, convert to micrometers
+        resolution_estimate <- resolution_estimate * 1000000
+        cat("Converted from meters to micrometers:", resolution_estimate, "\n")
+      } else if (resolution_estimate < 1) {
+        # Likely in millimeters, convert to micrometers
+        resolution_estimate <- resolution_estimate * 1000
+        cat("Converted from millimeters to micrometers:", resolution_estimate, "\n")
+      } else if (resolution_estimate > 10000) {
+        # Likely in nanometers, convert to micrometers
+        resolution_estimate <- resolution_estimate / 1000
+        cat("Converted from nanometers to micrometers:", resolution_estimate, "\n")
+      }
+      # If between 1-10000, assume already in micrometers
+      
+      cat("Final resolution estimate:", resolution_estimate, "μm/pixel\n")
+    }
+    
   }, error = function(e) {
-    cat("Could not estimate MSI resolution:", e$message, "\n")
+    cat("Error in MSI resolution estimation:", e$message, "\n")
   })
   
   return(resolution_estimate)
@@ -392,6 +608,9 @@ ui <- fluidPage(
                   min = -100, max = 100, value = 0, step = 0.1),
       
       # Display options
+      radioButtons("render_mode", "Render Mode:",
+                   choices = c("Overlay" = "overlay", "Clean MSI Only" = "clean"),
+                   selected = "overlay"),
       checkboxInput("spatial", "Spatial plot only", value = TRUE),
       checkboxInput("debug", "Debug plot?", value = FALSE),
       
@@ -570,10 +789,25 @@ server <- function(input, output, session) {
           updateNumericInput(session, "msi_microns_per_pixel", value = round(estimated_resolution, 2))
           showNotification(paste("Auto-detected MSI resolution:", round(estimated_resolution, 2), "μm/pixel"), 
                           type = "message")
+        } else {
+          # Try to extract resolution from filename
+          filename_resolution <- extract_resolution_from_filename(msi_names[imzml_idx])
+          if (!is.null(filename_resolution)) {
+            updateNumericInput(session, "msi_microns_per_pixel", value = filename_resolution)
+            showNotification(paste("Extracted MSI resolution from filename:", filename_resolution, "μm/pixel"), 
+                            type = "message")
+          } else {
+            showNotification("Could not auto-detect MSI resolution. Please enter manually.", 
+                            type = "warning")
+          }
         }
         
         #try to call plotting server with error handling
         tryCatch({
+          # First inspect the MSI data for resolution debugging
+          cat("=== Debugging MSI Resolution ===\n")
+          inspect_msi_resolution(dat_in)
+          
           plot_card_server("hist_plot_card", dat_in, 
                            spatialOnly = input$spatial, 
                            allInputs = allInputs)
@@ -665,6 +899,22 @@ server <- function(input, output, session) {
         metadata_text <- c(metadata_text, paste(names(metadata$pixel_metadata)[i], ":", metadata$pixel_metadata[[i]]))
       }
     }
+    if (!is.null(metadata$pixelData_resolution)) {
+      metadata_text <- c(metadata_text, "--- PixelData Resolution ---")
+      for (i in seq_along(metadata$pixelData_resolution)) {
+        metadata_text <- c(metadata_text, paste(names(metadata$pixelData_resolution)[i], ":", metadata$pixelData_resolution[[i]]))
+      }
+    }
+    if (!is.null(metadata$experiment_notes)) {
+      metadata_text <- c(metadata_text, "--- Experiment Notes ---")
+      if (is.list(metadata$experiment_notes)) {
+        for (i in seq_along(metadata$experiment_notes)) {
+          metadata_text <- c(metadata_text, paste(names(metadata$experiment_notes)[i], ":", metadata$experiment_notes[[i]]))
+        }
+      } else {
+        metadata_text <- c(metadata_text, paste("Notes:", metadata$experiment_notes))
+      }
+    }
     if (!is.null(metadata$error)) {
       metadata_text <- c(metadata_text, paste("ERROR:", metadata$error))
     }
@@ -726,23 +976,37 @@ server <- function(input, output, session) {
            round(histology_field_height), " μm")
   })
   
-  # Auto-scale based on resolution when enabled
+  # Auto-scale based on resolution when enabled (this observer only handles the checkbox toggle)
   observe({
     req(input$auto_scale_resolution)
+    
+    # This observer only triggers when the auto_scale_resolution checkbox changes
+    # The actual scaling is handled by the resolution observer below
+  })
+  
+  # Trigger re-rendering when resolution values change (for manual resolution updates)
+  observe({
+    # Always update scale when resolution changes, even if auto-scale is off
     req(input$histology_microns_per_pixel, input$msi_microns_per_pixel)
     
-    if (input$auto_scale_resolution) {
-      # Calculate the resolution ratio
-      resolution_ratio <- input$msi_microns_per_pixel / input$histology_microns_per_pixel
-      
-      # Update the scale sliders based on resolution ratio
-      new_scale <- 1 / resolution_ratio  # Invert ratio for proper scaling
-      
-      # Constrain to slider limits
-      new_scale <- max(0.1, min(5, new_scale))
+    # Calculate the resolution ratio
+    resolution_ratio <- input$msi_microns_per_pixel / input$histology_microns_per_pixel
+    
+    # Update the scale sliders based on resolution ratio
+    new_scale <- 1 / resolution_ratio  # Invert ratio for proper scaling
+    
+    # Constrain to slider limits
+    new_scale <- max(0.1, min(5, new_scale))
+    
+    # Only update if auto-scale is enabled OR if this is a significant change
+    if (input$auto_scale_resolution || 
+        abs(new_scale - input$scalex) > 0.01 || 
+        abs(new_scale - input$scaley) > 0.01) {
       
       updateSliderInput(session, "scalex", value = new_scale)
       updateSliderInput(session, "scaley", value = new_scale)
+      
+      cat("Resolution changed - updated scale to:", new_scale, "\n")
     }
   })
   
